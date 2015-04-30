@@ -1,0 +1,178 @@
+CREATE EXTERNAL TABLE trips (medallion STRING, vendor_id STRING, pickup_datetime TIMESTAMP, dropoff_datetime TIMESTAMP, passengers INT, trip_length INT, trip_distance FLOAT, pickup_lon FLOAT, pickup_lat FLOAT, dropoff_lon FLOAT, dropoff_lat FLOAT, pickup_geoid STRING, pickup_name STRING, dropoff_geoid STRING, dropoff_name STRING)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+LOCATION 's3://yurovskytaxi/trips';
+
+CREATE EXTERNAL TABLE fares (medallion STRING, hack_license STRING, vendor_id STRING, pickup_datetime TIMESTAMP, payment_type STRING, fare_amount FLOAT, surcharge FLOAT, mta_tax FLOAT, tip_amount FLOAT, tolls_amount FLOAT, total_amount FLOAT)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+LOCATION 's3://yurovskytaxi/fares';
+
+create table whole as
+select t.medallion, t.pickup_datetime, t.dropoff_datetime, t.passengers, t.trip_length, t.trip_distance, t.pickup_lon, t.pickup_lat, t.dropoff_lon, t.dropoff_lat, t.pickup_geoid, t.pickup_name, t.dropoff_geoid, t.dropoff_name, f.payment_type, f.fare_amount, f.surcharge, f.mta_tax, f.tip_amount, f.tolls_amount, f.total_amount 
+from trips t
+join fares f on (t.medallion = f.medallion and t.pickup_datetime = f.pickup_datetime) 
+where (payment_type = 'CRD' and pickup_lat != 0);
+(took ~ 22.25min)
+
+CREATE EXTERNAL TABLE temp (day TIMESTAMP, temperature FLOAT)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+LOCATION 's3://yurovskytaxi/temp';
+
+CREATE EXTERNAL TABLE snow (day TIMESTAMP, snowfall FLOAT)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+LOCATION 's3://yurovskytaxi/snow';
+
+CREATE EXTERNAL TABLE rain (day TIMESTAMP, rainfall FLOAT)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+LOCATION 's3://yurovskytaxi/rain';
+
+CREATE EXTERNAL TABLE census_to_nta (borough STRING, borough_num INT, county INT, tract INT, puma INT, nta_code STRING, nta_name STRING)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+LOCATION 's3://yurovskytaxi/census_to_nta';
+
+CREATE EXTERNAL TABLE tracts_income (tract_short INT, tract_long STRING, borough_code INT, tract_name STRING, income INT)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+LOCATION 's3://yurovskytaxi/tracts';
+
+create table geo_income as
+select c.borough, c.borough_num, c.county, c.tract, c.nta_name, tract_long, tract_name, income
+from tracts_income t
+join census_to_nta c on (c.tract = tract_short and c.borough_num = borough_code);
+(took 4 secs)
+
+create table weather as
+select t.day, t.temperature, s.snowfall, r.rainfall
+from temp t
+join snow s on s.day = t.day
+join rain r on r.day = t.day;
+
+SELECT MEDALLION, COUNT(MEDALLION), AVG(TIP_AMOUNT), AVG(TIP_AMOUNT*100/FARE_AMOUNT) AS PERCENTAGE
+FROM WHOLE
+GROUP BY MEDALLION
+SORT BY PERCENTAGE;
+CPU Time Spent: 15 minutes 8 seconds (2:10min)
+
+SELECT PASSENGERS, COUNT(PASSENGERS), AVG(TIP_AMOUNT), AVG(TIP_AMOUNT*100/FARE_AMOUNT) AS PERCENTAGE
+FROM WHOLE
+GROUP BY PASSENGERS
+SORT BY PERCENTAGE;
+(2:10min) CPU Time Spent: 12 minutes 35 seconds
+
+select trip_distance, count(trip_distance), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by trip_distance
+sort by percentage;
+(2:20m) 16 minutes 24 seconds
+
+select trip_duration, count(trip_duration), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by trip_duration
+sort by percentage;
+CPU Time Spent: 14 minutes 51 seconds (2 min)
+
+select hour(pickup_datetime), count(hour(pickup_datetime)), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by hour(pickup_datetime)
+sort by percentage;
+(2:40) CPU time: 17 minutes 45 seconds
+
+select month(pickup_datetime), count(month(pickup_datetime)), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by month(pickup_datetime)
+sort by percentage;
+(2:25) CPU time: 17 minutes 41 seconds
+
+select from_unixtime(unix_timestamp(pickup_datetime), 'EEEE'), count(from_unixtime(unix_timestamp(pickup_datetime), 'EEEE')), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by from_unixtime(unix_timestamp(pickup_datetime), 'EEEE')
+sort by percentage;
+CPU Time Spent: 22 minutes 15 seconds (2:30)
+
+select hour(dropoff_datetime), count(hour(dropoff_datetime)), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by hour(dropoff_datetime)
+sort by percentage;
+CPU Time Spent: 17 minutes 53 seconds (2:11)
+
+select month(dropoff_datetime), count(month(dropoff_datetime)), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by month(dropoff_datetime)
+sort by percentage;
+CPU Time Spent: 17 minutes 45 seconds (2:19)
+
+select from_unixtime(unix_timestamp(dropoff_datetime), 'EEEE'), count(from_unixtime(unix_timestamp(dropoff_datetime), 'EEEE')), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by from_unixtime(unix_timestamp(dropoff_datetime), 'EEEE')
+sort by percentage;
+CPU time: 22 minutes 7 seconds (2:37)
+
+select w.pickup_name, g.nta_name, g.income, count(w.pickup_name), avg(w.tip_amount), avg(w.tip_amount*100/w.fare_amount) as percentage
+from whole w
+join geo_income g on g.tract_long = w.pickup_geoid
+group by w.pickup_name, g.income, g.nta_name
+sort by percentage;
+CPU Time Spent: 20 minutes 59 seconds (3:10min)
+
+select w.pickup_name, g.nta_name, g.income, count(w.pickup_name), avg(w.tip_amount), avg(w.tip_amount*100/w.fare_amount) as percentage
+from whole w
+join geo_income g on g.tract_long = w.pickup_geoid
+where hour(w.pickup_datetime) >= 6 and hour(w.pickup_datetime) <= 10
+group by w.pickup_name, g.income, g.nta_name
+sort by percentage;
+CPU Time Spent: 21 minutes 40 seconds 310 msec (3:22min)
+
+select w.dropoff_name, g.nta_name, g.income, count(w.dropoff_name), avg(w.tip_amount), avg(w.tip_amount*100/w.fare_amount) as percentage
+from whole w
+join geo_income g on g.tract_long = w.dropoff_geoid
+group by w.dropoff_name, g.income, g.nta_name
+sort by percentage;
+(22:02:56 - 22:05:29)
+21 minutes 35 seconds
+
+select w.dropoff_name, g.nta_name, g.income, count(w.dropoff_name), avg(w.tip_amount), avg(w.tip_amount*100/w.fare_amount) as percentage
+from whole w
+join geo_income g on g.tract_long = w.dropoff_geoid
+where hour(w.dropoff_datetime) >=17 and hour(w.dropoff_datetime) <= 21
+group by w.dropoff_name, g.income, g.nta_name
+sort by percentage;
+CPU Time Spent: 23 minutes 35 seconds 110 msec (3:01)
+
+SELECT WE.TEMPERATURE, COUNT(WE.TEMPERATURE), AVG(W.TIP_AMOUNT), AVG(W.TIP_AMOUNT*100/W.FARE_AMOUNT) AS PERCENTAGE
+FROM WHOLE W
+JOIN WEATHER WE ON (MONTH(W.PICKUP_DATETIME) = MONTH(WE.DAY) AND DAY(W.PICKUP_DATETIME) = DAY(WE.DAY) AND HOUR(W.PICKUP_DATETIME) = HOUR(WE.DAY))
+GROUP BY WE.TEMPERATURE
+SORT BY PERCENTAGE;
+(~4min) CPU time: 26 min 59 sec
+
+SELECT w.medallion, W.pickup_name, w.dropoff_name, w.pickup_datetime, w.dropoff_datetime, w.trip_distance, w.trip_length, w.passengers, Count(w.medallion), AVG(W.TIP_AMOUNT), AVG(W.TIP_AMOUNT*100/W.FARE_AMOUNT) AS PERCENTAGE
+FROM WHOLE W
+JOIN WEATHER WE ON (MONTH(W.PICKUP_DATETIME) = MONTH(WE.DAY) AND DAY(W.PICKUP_DATETIME) = DAY(WE.DAY) AND HOUR(W.PICKUP_DATETIME) = HOUR(WE.DAY))
+where we.temperature = 56.40
+GROUP BY w.medallion, W.pickup_name, w.dropoff_name, w.pickup_datetime, w.dropoff_datetime, w.trip_distance, w.trip_length, w.passengers
+SORT BY w.medallion;
+
+SELECT WE.SNOWFALL, COUNT(WE.SNOWFALL), AVG(W.TIP_AMOUNT), AVG(W.TIP_AMOUNT*100/W.FARE_AMOUNT) AS PERCENTAGE
+FROM WHOLE W
+JOIN WEATHER WE ON (MONTH(W.PICKUP_DATETIME) = MONTH(WE.DAY) AND DAY(W.PICKUP_DATETIME) = DAY(WE.DAY) AND HOUR(W.PICKUP_DATETIME) = HOUR(WE.DAY))
+GROUP BY WE.SNOWFALL
+SORT BY PERCENTAGE;
+(~3 min) CPU time: 25 min 14 sec
+
+SELECT WE.RAINFALL, COUNT(WE.SNOWFALL), AVG(W.TIP_AMOUNT), AVG(W.TIP_AMOUNT*100/W.FARE_AMOUNT) AS PERCENTAGE
+FROM WHOLE W
+JOIN WEATHER WE ON (MONTH(W.PICKUP_DATETIME) = MONTH(WE.DAY) AND DAY(W.PICKUP_DATETIME) = DAY(WE.DAY) AND HOUR(W.PICKUP_DATETIME) = HOUR(WE.DAY))
+GROUP BY WE.RAINFALL
+SORT BY PERCENTAGE;
+(~2:40 min) CPU Time Spent: 26 minutes 10 seconds
+
+select avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from fares;
+CPU Time Spent: 25 minutes 27 seconds (2:47min)
+
+select avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole;
+CPU Time Spent: 12 minutes 14 seconds (1:47min)
+
+select total_amount, count (total_amount), avg(tip_amount), avg(tip_amount*100/fare_amount) as percentage
+from whole
+group by total_amount;
+CPU Time Spent: 17 minutes 2 seconds 310 msec (2:14)
